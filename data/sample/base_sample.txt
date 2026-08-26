@@ -1,0 +1,5 @@
+MDR_REPORT_KEY|A|B
+R1|x|y
+R2|x|y
+|x|y
+R3|x
