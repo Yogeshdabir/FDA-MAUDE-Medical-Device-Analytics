@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: maude-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: maude_pms_analytics
+      POSTGRES_USER: maude
+      POSTGRES_PASSWORD: maude_local_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - maude_pgdata:/var/lib/postgresql/data
+
+volumes:
+  maude_pgdata:
