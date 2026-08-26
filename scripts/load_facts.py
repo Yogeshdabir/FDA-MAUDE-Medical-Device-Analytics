@@ -28,12 +28,11 @@ DEVICE_FIELDS = [
 ]
 
 
-def open_source(path: Path, member: str | None):
+def open_source(path: Path, member: str):
     if path.suffix.lower() != ".zip":
         return path.open("r", encoding="utf-8-sig", errors="replace", newline=""), None
     archive = zipfile.ZipFile(path)
-    name = member or next(n for n in archive.namelist() if not n.endswith("/"))
-    return io.TextIOWrapper(archive.open(name), encoding="utf-8-sig", errors="replace", newline=""), archive
+    return io.TextIOWrapper(archive.open(member), encoding="utf-8-sig", errors="replace", newline=""), archive
 
 
 def date_value(value: str, formats: tuple[str, ...]) -> str:
@@ -57,32 +56,37 @@ def integer_value(value: str) -> str:
 
 
 def copy_csv(cur, table: str, columns: list[str], rows):
+    """COPY transformed rows to PostgreSQL in bounded memory."""
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(columns)
     count = 0
+
+    def flush():
+        nonlocal buf, writer
+        if buf.tell() == 0:
+            return
+        buf.seek(0)
+        with cur.copy(f"COPY {table} ({', '.join(columns)}) FROM STDIN WITH (FORMAT CSV, HEADER TRUE)") as copy:
+            copy.write(buf.read())
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+
     for row in rows:
         writer.writerow(row)
         count += 1
         if buf.tell() >= 1024 * 1024:
-            buf.seek(0)
-            cur.copy(f"COPY {table} ({', '.join(columns)}) FROM STDIN WITH (FORMAT CSV, HEADER TRUE)").write(buf.read())
-            buf = io.StringIO()
-            writer = csv.writer(buf)
-    if buf.tell():
-        buf.seek(0)
-        cur.copy(f"COPY {table} ({', '.join(columns)}) FROM STDIN WITH (FORMAT CSV, HEADER TRUE)").write(buf.read())
+            flush()
+    flush()
     return count
 
 
-def load_base(conn, source: Path):
+def load_base(source: Path):
     fh, archive = open_source(source, "mdrfoi.txt")
     try:
         reader = csv.DictReader(fh, delimiter="|")
-        selected = BASE_FIELDS
-        rows = []
         for r in reader:
-            rows.append([
+            yield [
                 r["MDR_REPORT_KEY"].strip(), r["EVENT_KEY"].strip(), r["REPORT_NUMBER"].strip(),
                 r["REPORT_SOURCE_CODE"].strip(), integer_value(r["NUMBER_DEVICES_IN_EVENT"]),
                 integer_value(r["NUMBER_PATIENTS_IN_EVENT"]), date_value(r["DATE_RECEIVED"], ("%m/%d/%Y",)),
@@ -92,23 +96,18 @@ def load_base(conn, source: Path):
                 r["TYPE_OF_REPORT"].strip(), r["SOURCE_TYPE"].strip(), date_value(r["DATE_ADDED"], ("%m/%d/%Y",)),
                 date_value(r["DATE_CHANGED"], ("%m/%d/%Y",)), r["REPORTER_STATE_CODE"].strip(),
                 r["REPORTER_COUNTRY_CODE"].strip(), r["PMA_PMN_NUM"].strip(), r["SUMMARY_REPORT"].strip(),
-            ])
-            if len(rows) >= 5000:
-                yield from rows
-                rows = []
-        yield from rows
+            ]
     finally:
         fh.close()
         if archive: archive.close()
 
 
-def load_device(conn, source: Path):
+def load_device(source: Path):
     fh, archive = open_source(source, "DEVICE.txt")
     try:
         reader = csv.DictReader(fh, delimiter="|")
-        rows = []
         for r in reader:
-            rows.append([
+            yield [
                 r["MDR_REPORT_KEY"].strip(), r["DEVICE_EVENT_KEY"].strip(), integer_value(r["DEVICE_SEQUENCE_NO"]),
                 r["IMPLANT_FLAG"].strip(), r["DATE_REMOVED_FLAG"].strip(), integer_value(r["IMPLANT_DATE_YEAR"]),
                 integer_value(r["DATE_REMOVED_YEAR"]), r["SERVICED_BY_3RD_PARTY_FLAG"].strip(),
@@ -119,11 +118,7 @@ def load_device(conn, source: Path):
                 r["DEVICE_REPORT_PRODUCT_CODE"].strip(), r["DEVICE_AGE_TEXT"].strip(),
                 r["DEVICE_EVALUATED_BY_MANUFACTUR"].strip(), r["COMBINATION_PRODUCT_FLAG"].strip(),
                 r["UDI-DI"].strip(), r["UDI-PUBLIC"].strip(),
-            ])
-            if len(rows) >= 5000:
-                yield from rows
-                rows = []
-        yield from rows
+            ]
     finally:
         fh.close()
         if archive: archive.close()
@@ -141,18 +136,21 @@ def main() -> int:
             cur.execute("TRUNCATE fact.maude_device, fact.maude_report")
             cur.execute("CREATE TEMP TABLE stg_report AS SELECT * FROM fact.maude_report WITH NO DATA")
             cur.execute("CREATE TEMP TABLE stg_device AS SELECT * FROM fact.maude_device WITH NO DATA")
-            copy_csv(cur, "stg_report", BASE_FIELDS, load_base(conn, args.base))
+
+            copy_csv(cur, "stg_report", BASE_FIELDS, load_base(args.base))
             cur.execute("SELECT COUNT(*) FROM stg_report")
             base_count = cur.fetchone()[0]
-            cur.execute("SELECT mdr_report_key, COUNT(*) FROM stg_report GROUP BY 1 HAVING COUNT(*) > 1 LIMIT 1")
-            if cur.fetchone(): raise RuntimeError("Duplicate MDR_REPORT_KEY detected in staging")
+            cur.execute("SELECT mdr_report_key FROM stg_report GROUP BY 1 HAVING COUNT(*) > 1 LIMIT 1")
+            if cur.fetchone():
+                raise RuntimeError("Duplicate MDR_REPORT_KEY detected in staging")
             cur.execute("INSERT INTO fact.maude_report SELECT * FROM stg_report")
 
-            copy_csv(cur, "stg_device", DEVICE_FIELDS, load_device(conn, args.device))
+            copy_csv(cur, "stg_device", DEVICE_FIELDS, load_device(args.device))
             cur.execute("SELECT COUNT(*) FROM stg_device")
             device_count = cur.fetchone()[0]
-            cur.execute("SELECT device_event_key, COUNT(*) FROM stg_device GROUP BY 1 HAVING COUNT(*) > 1 LIMIT 1")
-            if cur.fetchone(): raise RuntimeError("Duplicate DEVICE_EVENT_KEY detected in staging")
+            cur.execute("SELECT device_event_key FROM stg_device GROUP BY 1 HAVING COUNT(*) > 1 LIMIT 1")
+            if cur.fetchone():
+                raise RuntimeError("Duplicate DEVICE_EVENT_KEY detected in staging")
             cur.execute("SELECT COUNT(*) FROM stg_device d LEFT JOIN fact.maude_report r USING (mdr_report_key) WHERE r.mdr_report_key IS NULL")
             orphan_count = cur.fetchone()[0]
             cur.execute("INSERT INTO fact.maude_device SELECT * FROM stg_device WHERE mdr_report_key IN (SELECT mdr_report_key FROM fact.maude_report)")
