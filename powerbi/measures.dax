@@ -1,0 +1,22 @@
+// Core report-level measures
+Distinct MAUDE Reports = DISTINCTCOUNT(fact_maude_report[mdr_report_key])
+
+Device Records = COUNTROWS(fact_maude_device)
+
+Reports With Adverse Event =
+CALCULATE(
+    [Distinct MAUDE Reports],
+    fact_maude_report[adverse_event_flag] = "Y"
+)
+
+Reports With Product Problem =
+CALCULATE(
+    [Distinct MAUDE Reports],
+    fact_maude_report[product_problem_flag] = "Y"
+)
+
+Adverse Event Share =
+DIVIDE([Reports With Adverse Event], [Distinct MAUDE Reports])
+
+Devices per Report =
+DIVIDE([Device Records], [Distinct MAUDE Reports])
