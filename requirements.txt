@@ -1,0 +1,8 @@
+pandas
+numpy
+openpyxl
+python-dateutil
+psycopg[binary]
+sqlalchemy
+pytest
+pytest-cov
