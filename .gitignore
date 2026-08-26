@@ -5,10 +5,11 @@ __pycache__/
 venv/
 .env
 
-# Data
+# Data / generated outputs
 raw_data/
 data/raw/
 data/processed/
+outputs/
 *.csv
 *.zip
 *.parquet
