@@ -2,52 +2,48 @@
 
 ## Overview
 
-An end-to-end MedTech analytics portfolio project built around public FDA MAUDE reporting data. The project demonstrates business analysis, Python ETL, data-quality controls, PostgreSQL/SQL analytics, Power BI reporting, testing/UAT, and a clearly separated synthetic investigation/CAPA workflow.
+An end-to-end MedTech analytics portfolio project built around public FDA MAUDE reporting data. The implementation combines streaming Python ingestion, data-quality controls, PostgreSQL/SQL analytics, Power BI reporting, testing/UAT, and a clearly separated synthetic investigation/CAPA workflow.
 
-> **Important:** This repository is a portfolio/demo project. MAUDE reporting data does not by itself establish incidence, prevalence, failure rates, comparative safety, or causality. Investigation, root-cause, CAPA, and effectiveness information in the synthetic workflow is fictional and is not FDA-sourced.
+> **Important:** This is a portfolio/demo project. MAUDE reporting data does not by itself establish incidence, prevalence, failure rates, comparative safety, or causality. Synthetic investigation, root-cause, CAPA, and effectiveness information is fictional and not FDA-sourced.
 
-## Business Problem
+## Current implementation
+
+The repository now contains a runnable Phase 1 foundation that can:
+
+- Stream `.txt` or `.zip` MAUDE-style delimited files without loading the entire file into memory.
+- Infer expected field count from the source header.
+- Detect malformed rows and missing `MDR_REPORT_KEY` values.
+- Preserve rejected rows in quarantine output rather than silently dropping them.
+- Produce JSON ingestion summaries and field-level data-quality profiles.
+- Run automated pytest coverage for the ingestion/quarantine logic.
+- Bulk-load cleaned CSV output into PostgreSQL.
+- Start a local PostgreSQL 16 instance with Docker Compose.
+
+## Business problem
 
 Public post-market reporting data is large, distributed across related files, and contains structural and completeness issues. The objective is to create a transparent and reproducible analytical workflow that preserves data grain, exposes data-quality limitations, and helps stakeholders understand reporting patterns without overstating what the data can prove.
-
-## Objectives
-
-- Validate source structure and data quality before analysis.
-- Preserve separate report-level and device-level analytical grains.
-- Build reproducible SQL analytics and Power BI measures.
-- Reconcile core KPIs between source/SQL reference calculations and BI outputs.
-- Present reporting patterns as review candidates rather than automatic safety conclusions.
-- Demonstrate a separate synthetic quality workflow from review candidate through investigation, CAPA, and effectiveness check.
-- Maintain requirements traceability, testing, UAT, and validation evidence.
 
 ## Architecture
 
 ```text
-FDA MAUDE files
-      |
-      v
-Python ingestion + validation
-      |
-      +--> quarantine / DQ evidence
-      |
-      v
-clean analytical data
-      |
-      v
-PostgreSQL
-  |             |
-  v             v
-Report Fact   Device Fact
-  \             /
-   \           /
-    v         v
-      Dimensions
+FDA MAUDE ZIP/TXT files
           |
           v
-   Analytical SQL views
+Streaming Python ingestion
+          |
+          +----> quarantine / DQ evidence
           |
           v
-       Power BI
+Clean source outputs
+          |
+          v
+PostgreSQL raw/staging/clean/DQ/model layers
+          |
+          v
+Analytical SQL views
+          |
+          v
+Power BI semantic model + dashboard
           |
           +--> Executive Overview
           +--> Device/Product Analysis
@@ -55,37 +51,34 @@ Report Fact   Device Fact
           +--> Data Quality
           +--> Methodology & Limitations
 
-Synthetic workflow (separate)
+Separate synthetic demonstration workflow:
 Pattern -> Review -> Investigation -> CAPA -> Effectiveness
 ```
 
-## Project Phases
+## Data model principles
 
-1. Source assessment and baseline
-2. Business requirements and user stories
-3. Process and workflow design
-4. Data dictionary and data model
-5. Data-quality framework
-6. Python ETL and validation
-7. SQL analytics and Power BI model
-8. Synthetic quality workflow
-9. Testing, reconciliation, and UAT
-10. Portfolio presentation and release package
+- `MDR_REPORT_KEY` is preserved as a string and used for report reconciliation.
+- Report-level and device-level records are modeled separately.
+- Distinct report count and device-record count are separate measures.
+- Malformed records are quarantined and counted.
+- Base/device orphan keys are surfaced rather than silently discarded.
+- Problem-code mappings are not invented when reference data is missing.
+- Raw FDA data is not committed to the repository.
 
-## Technology Stack
+## Technology stack
 
 | Layer | Technology |
 |---|---|
 | Source | FDA MAUDE |
-| ETL | Python / pandas |
-| Database | PostgreSQL |
+| ETL | Python / pandas-compatible workflow; streaming csv processing for large files |
+| Database | PostgreSQL 16 |
 | Analytics | SQL |
 | BI | Power BI / DAX |
-| Testing | Python, SQL, Power BI validation, UAT |
+| Testing | pytest, SQL reconciliation, Power BI validation, UAT |
 | Documentation | Markdown |
 | Version control | Git / GitHub |
 
-## Repository Structure
+## Repository structure
 
 ```text
 00_Project_Overview/
@@ -103,41 +96,83 @@ Pattern -> Review -> Investigation -> CAPA -> Effectiveness
 12_Executive_Case_Study/
 13_Demo_Materials/
 14_Limitations_and_References/
+src/maude_pipeline/
+tests/
+scripts/
+sql/
+data/sample/
 ```
 
-## Validation Principles
+## Quick start
 
-Core validation controls include:
+```bash
+git clone https://github.com/Yogeshdabir/FDA-MAUDE-Medical-Device-Analytics.git
+cd FDA-MAUDE-Medical-Device-Analytics
+python -m venv .venv
+```
 
-- report-key uniqueness
-- device-key uniqueness
-- Base/Device orphan reconciliation
-- report-vs-device grain protection
-- monthly trend reconciliation
-- event/product aggregation reconciliation
-- DAX-to-SQL KPI reconciliation
-- Power BI filter and relationship testing
-- synthetic-data isolation testing
-- UAT and requirements traceability
+Windows:
+```powershell
+.venv\Scripts\activate
+```
 
-## Synthetic Data Boundary
+macOS/Linux:
+```bash
+source .venv/bin/activate
+```
 
-Synthetic investigation, root-cause, CAPA, and effectiveness records are stored separately and must be marked as synthetic. They cannot modify or overwrite FDA source-derived facts or MAUDE analytical counts.
+Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+Run tests:
+```bash
+pytest -q
+```
+
+Run the included sample:
+```bash
+python -m src.maude_pipeline --base data/sample/base_sample.txt --output-dir outputs/sample
+```
+
+Run the pipeline against downloaded FDA MAUDE files:
+```bash
+python -m src.maude_pipeline \
+  --base /path/to/mdrfoi.zip \
+  --device /path/to/device.zip \
+  --output-dir outputs/maude_2026
+```
+
+Start PostgreSQL locally:
+```bash
+docker compose up -d
+```
+
+See [`RUN_LOCAL.md`](RUN_LOCAL.md) for the complete local workflow.
+
+## FDA source
+
+FDA publishes downloadable MAUDE data files and states that the downloadable ZIP files are updated monthly. Use the official FDA MDR Data Files page for the current source snapshot:
+
+https://www.fda.gov/medical-devices/medical-device-reporting-mdr-how-report-medical-device-problems/mdr-data-files
+
+## Validation principles
+
+Core controls include report-key uniqueness, device-key uniqueness, Base/Device reconciliation, report-vs-device grain protection, malformed-row quarantine, date validation, event/product aggregation reconciliation, DAX-to-SQL KPI reconciliation, Power BI relationship/filter testing, synthetic-data isolation, UAT, and requirements traceability.
 
 ## Limitations
 
-MAUDE is a passive reporting system. Reports may be incomplete, inaccurate, duplicated, or submitted for different purposes. Report counts are not exposure-adjusted rates and do not independently establish device causality or comparative safety. This project therefore presents reporting patterns and data-quality indicators rather than confirmed safety conclusions.
+MAUDE is a passive reporting source. Reports may be incomplete, inaccurate, duplicated, or submitted for different purposes. Report counts are not exposure-adjusted rates and do not independently establish device causality or comparative safety. The project therefore presents reporting patterns and data-quality indicators rather than confirmed safety conclusions.
 
-## Reproducibility
+## Synthetic data boundary
 
-The implementation will document source snapshot/date, transformation rules, schema assumptions, validation checks, model grain, and version history. Raw FDA data should be downloaded separately from the official source and should not be committed to this repository unless licensing/size considerations permit it.
+Synthetic investigation, root-cause, CAPA, and effectiveness records are stored separately and must be marked as synthetic. They cannot modify or overwrite FDA source-derived facts or MAUDE analytical counts.
 
-## Portfolio Positioning
-
-This project demonstrates the combination of:
+## Portfolio positioning
 
 **MedTech/PMS domain knowledge + Business Analysis + Data Engineering + SQL + Power BI + Data Quality + Validation/UAT.**
 
 ## Status
 
-**Portfolio foundation initialized.** Implementation artifacts, source-specific extracts, executable ETL, SQL deployment scripts, Power BI files, and validation evidence will be added as they are built and verified.
+**Phase 1 executable foundation implemented.** Next layers are the full DQ/report-to-device reconciliation module, production PostgreSQL star-schema deployment, analytical SQL views, Power BI implementation, synthetic workflow data generation, and final validation evidence.
