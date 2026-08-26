@@ -1,4 +1,4 @@
-# Run the local Phase 1 pipeline
+# Run the local Phase 1–2 pipeline
 
 ## 1. Clone
 ```bash
@@ -6,7 +6,7 @@ git clone https://github.com/Yogeshdabir/FDA-MAUDE-Medical-Device-Analytics.git
 cd FDA-MAUDE-Medical-Device-Analytics
 ```
 
-## 2. Create and activate a Python environment
+## 2. Python environment
 Windows:
 ```powershell
 python -m venv .venv
@@ -18,27 +18,25 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-## 3. Install dependencies
+## 3. Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-## 4. Run automated tests
+## 4. Automated tests
 ```bash
 pytest -q
 ```
 
-## 5. Run the sample pipeline
+## 5. Run the sample ingestion
 ```bash
 python -m src.maude_pipeline --base data/sample/base_sample.txt --output-dir outputs/sample
 ```
 
-The sample intentionally contains one missing `MDR_REPORT_KEY` and one malformed row. The pipeline creates a clean CSV, quarantine CSV, and `ingestion_summary.json`.
+The sample intentionally contains one missing `MDR_REPORT_KEY` and one malformed row. The pipeline writes clean output, quarantine output, and an ingestion summary.
 
-## 6. Run the real MAUDE files
-Download the approved MAUDE files separately from FDA. The FDA publishes downloadable ZIP files and updates the current-year files monthly: https://www.fda.gov/medical-devices/medical-device-reporting-mdr-how-report-medical-device-problems/mdr-data-files
-
-You can point the pipeline directly at the ZIP files:
+## 6. Run real MAUDE files
+Download the approved MAUDE files separately from FDA. Do not commit raw source ZIPs to GitHub.
 ```bash
 python -m src.maude_pipeline \
   --base /path/to/mdrfoi.zip \
@@ -46,40 +44,39 @@ python -m src.maude_pipeline \
   --output-dir outputs/maude_2026
 ```
 
-The pipeline streams rows, infers the expected field count from the source header, writes valid records to clean CSV files, and writes malformed/missing-key rows to quarantine files.
+The pipeline streams rows and preserves malformed/missing-key rows in quarantine.
 
-## 7. Generate a standalone profile from an extracted file
-```bash
-python scripts/profile_sources.py /path/to/mdrfoi.txt --output outputs/base_profile.json
-```
-
-## 8. Start local PostgreSQL
-Docker Desktop is the easiest option:
+## 7. Start PostgreSQL
+Requires Docker Desktop.
 ```bash
 docker compose up -d
 ```
 
-Connection string:
+Connection:
 ```text
 postgresql://maude:maude_local_password@localhost:5432/maude_pms_analytics
 ```
 
-## 9. Create the database schemas
-If `psql` is installed:
+## 8. Deploy the analytical schema
 ```bash
-psql postgresql://maude:maude_local_password@localhost:5432/maude_pms_analytics -f sql/01_create_schemas.sql
+python scripts/load_postgres.py
 ```
 
-## 10. Load a cleaned CSV into PostgreSQL
+This applies:
+- `sql/01_create_schemas.sql`
+- `sql/02_core_tables.sql`
+- `sql/03_analytical_views.sql`
+
+## 9. Verify PostgreSQL
 ```bash
-python -m src.maude_pipeline.load_postgres \
-  --conninfo "postgresql://maude:maude_local_password@localhost:5432/maude_pms_analytics" \
-  --file outputs/maude_2026/base_clean.csv \
-  --schema raw \
-  --table maude_base_clean
+psql postgresql://maude:maude_local_password@localhost:5432/maude_pms_analytics
 ```
 
-Repeat for the Device file with a different table name.
+Then:
+```sql
+SELECT * FROM analytical.data_quality_summary;
+SELECT * FROM analytical.monthly_report_trend;
+```
 
 ## Current implementation boundary
-The repository now has a runnable streaming ingestion, quarantine, profiling, test, and PostgreSQL bulk-load foundation. The full star-schema build, analytical SQL views, and Power BI model are the next implementation layer; no raw FDA files are committed to GitHub.
+The repository now contains executable streaming ingestion, quarantine, source validation, tests, PostgreSQL schemas, core report/device tables, and analytical views. The next layer is the production-quality mapping from the exact MAUDE source columns into the report/device tables, followed by Power BI/PBIP integration and reconciliation evidence.
